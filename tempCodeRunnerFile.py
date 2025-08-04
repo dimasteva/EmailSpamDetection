@@ -42,19 +42,14 @@ def evaluate_model(model, X, y, n_splits=10, vectorizer=None):
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
         explainer = shap.Explainer(model, X, feature_names=vectorizer.get_feature_names_out())
-        shap_values = explainer(X[:50])  # manji uzorak za brzinu
+        shap_values = explainer(X[:50])
 
-        # Računamo prosečan apsolutni uticaj svakog feature-a
         mean_abs_shap = np.abs(shap_values.values).mean(axis=0)
         feature_names = vectorizer.get_feature_names_out()
 
-        # Parovi (reč, shap_vrednost)
         feature_importance = list(zip(feature_names, mean_abs_shap))
-
-        # Sortiraj po značaju (najveći prvo)
         feature_importance.sort(key=lambda x: x[1], reverse=True)
 
-        # Prikaz top 20 reči
         print("\nTop 20 najvažnijih reči po SHAP značaju:")
         for word, shap_val in feature_importance[:20]:
             print(f"{word:<20} SHAP: {shap_val:.5f}")
@@ -151,19 +146,15 @@ def main():
     model.fit(X, y)
 
     explainer = shap.Explainer(model, X, feature_names=vectorizer.get_feature_names_out())
-    shap_values = explainer(X[:50])  # manji uzorak za brzinu
+    shap_values = explainer(X[:50]) # manji uzorak za brzinu
 
-    # Računamo prosečan apsolutni uticaj svakog feature-a
     mean_abs_shap = np.abs(shap_values.values).mean(axis=0)
     feature_names = vectorizer.get_feature_names_out()
 
-    # Parovi (reč, shap_vrednost)
     feature_importance = list(zip(feature_names, mean_abs_shap))
 
-    # Sortiraj po značaju (najveći prvo)
     feature_importance.sort(key=lambda x: x[1], reverse=True)
 
-    # Prikaz top 20 reči
     print("\nTop 20 najvažnijih reči po SHAP značaju:")
     for word, shap_val in feature_importance[:20]:
         print(f"{word:<20} SHAP: {shap_val:.5f}")
