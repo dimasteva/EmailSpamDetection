@@ -13,6 +13,9 @@ from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 import numpy as np
 
+import shap
+import matplotlib.pyplot as plt
+
 def load_and_balance_data(filepath):
     df = pd.read_csv(filepath)
     df_majority = df[df['spam'] == df['spam'].value_counts().idxmax()]
@@ -26,9 +29,9 @@ def vectorize_text(df, text_column='text'):
     vectorizer = TfidfVectorizer()
     X = vectorizer.fit_transform(df[text_column])
     y = df['spam']
-    return X, y
+    return X, y, vectorizer
 
-def evaluate_model(model, X, y, n_splits=10):
+def evaluate_model(model, X, y, n_splits=10, vectorizer=None):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls = [], [], [], []
 
@@ -38,6 +41,14 @@ def evaluate_model(model, X, y, n_splits=10):
 
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
+
+          # SHAP analiza
+        feature_names = vectorizer.get_feature_names_out()
+        shap_importance = compute_shap_importance(model, X[:50], feature_names)
+
+        print("\nTop 20 najvaznijih reci po SHAP znacaju:")
+        for word, shap_val in shap_importance[:20]:
+            print(f"{word:<20} SHAP: {shap_val:.5f}")
 
         acc = accuracy_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred)
@@ -56,6 +67,16 @@ def evaluate_model(model, X, y, n_splits=10):
     print(f"F1 score: {sum(f1_scores)/len(f1_scores):.3f}")
     print(f"Precision: {sum(precisions)/len(precisions):.3f}")
     print(f"Recall: {sum(recalls)/len(recalls):.3f}")
+
+def compute_shap_importance(model, X_sample, feature_names):
+    explainer = shap.Explainer(model, X_sample, feature_names=feature_names)
+    shap_values = explainer(X_sample)
+
+    mean_abs_shap = np.abs(shap_values.values).mean(axis=0)
+    feature_importance = list(zip(feature_names, mean_abs_shap))
+    feature_importance.sort(key=lambda x: x[1], reverse=True)
+
+    return feature_importance
 
 def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=100):
     tokenizer = Tokenizer(num_words=max_words)
@@ -106,21 +127,26 @@ def evaluate_bilstm(X, y, n_splits=10, epochs=3, batch_size=32, max_words=5000, 
 
 def main():
     df_downsampled = load_and_balance_data('emails.csv')
-    X, y = vectorize_text(df_downsampled, text_column='text')
+    X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
 
-    print("\nBi-LSTM:")
-    max_words = 5000
-    max_len = 100
-    X_bilstm, y_bilstm, _ = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    evaluate_bilstm(X_bilstm, y_bilstm, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
-    print("Random Forest:")
-    evaluate_model(RandomForestClassifier(random_state=42), X, y, n_splits=10)
-    print("\nDecision Tree:")
-    evaluate_model(DecisionTreeClassifier(random_state=42), X, y, n_splits=10)
+    #print("\nBi-LSTM:")
+    #max_words = 5000
+    #max_len = 100
+    #X_bilstm, y_bilstm, _ = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
+    #evaluate_bilstm(X_bilstm, y_bilstm, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
+
+    #print("Random Forest:")
+    #evaluate_model(RandomForestClassifier(random_state=42), X, y, n_splits=10)
+
+    #print("\nDecision Tree:")
+    #evaluate_model(DecisionTreeClassifier(random_state=42), X, y, n_splits=10)
+
     print("\nLogistic Regression:")
-    evaluate_model(LogisticRegression(max_iter=1000, random_state=42), X, y, n_splits=10)
-    print("\nNaive Bayes:")
-    evaluate_model(MultinomialNB(), X, y, n_splits=10)
+    evaluate_model(LogisticRegression(max_iter=1000, random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
+
+    #print("\nNaive Bayes:")
+    #evaluate_model(MultinomialNB(), X, y, n_splits=10)
+
 
 
 if __name__ == "__main__":
