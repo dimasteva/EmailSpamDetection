@@ -45,7 +45,7 @@ def evaluate_model(model, X, y, n_splits=10, vectorizer=None):
           # SHAP analiza
         if (isinstance(model, RandomForestClassifier) or isinstance(model, DecisionTreeClassifier)) and vectorizer is not None:
             feature_names = vectorizer.get_feature_names_out()
-            shap_importance = compute_shap_importance_rf(model, X_train, feature_names)
+            shap_importance = compute_shap_importance_rf_dt(model, X_train, feature_names)
             model_name = type(model).__name__.replace("Classifier", "").replace("RandomForest", "Random Forest").replace("DecisionTree", "Decision Tree")
             print(f"\nTop 20 najvaznijih reci po SHAP znacaju ({model_name}):")
             for word, val in shap_importance[:20]:
@@ -56,6 +56,12 @@ def evaluate_model(model, X, y, n_splits=10, vectorizer=None):
             print("\nTop 20 najvaznijih reci po SHAP znacaju (Logistic Regression):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {val:.5f}")
+        elif isinstance(model, MultinomialNB) and vectorizer is not None:
+            feature_names = vectorizer.get_feature_names_out()
+            shap_importance = compute_shap_importance_nb(model, X_train, feature_names)
+            print("\nTop 20 najvaznijih reci po SHAP znacaju (Naive Bayes):")
+            for word, val in shap_importance[:20]:
+                print(f"{word:<20} SHAP: {float(val[0]):.5f}")
 
         acc = accuracy_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred)
@@ -85,7 +91,7 @@ def compute_shap_importance(model, X_sample, feature_names):
 
     return feature_importance
 
-def compute_shap_importance_rf(model, X_sample, feature_names):
+def compute_shap_importance_rf_dt(model, X_sample, feature_names):
     X_sample_dense = X_sample.toarray() if hasattr(X_sample, "toarray") else X_sample
     
     background = shap.sample(X_sample_dense, 50, random_state=42)
@@ -102,6 +108,25 @@ def compute_shap_importance_rf(model, X_sample, feature_names):
     shap_importance_list = list(zip(feature_names, mean_abs_shap))
     shap_importance_list.sort(key=lambda x: x[1], reverse=True)
     
+    return shap_importance_list
+
+def compute_shap_importance_nb(model, X_sample, feature_names):
+    X_sample_dense = X_sample.toarray() if hasattr(X_sample, "toarray") else X_sample
+
+    background = shap.sample(X_sample_dense, 50, random_state=42)
+    explainer = shap.KernelExplainer(model.predict_proba, background)
+
+    shap_values = explainer.shap_values(X_sample_dense[:20], nsamples=100)
+
+    shap_vals = shap_values[1] if isinstance(shap_values, list) and len(shap_values) == 2 else shap_values
+
+    shap_vals = np.array(shap_vals)
+
+    mean_abs_shap = np.abs(shap_vals).mean(axis=0)
+
+    shap_importance_list = list(zip(feature_names, mean_abs_shap.tolist()))
+    shap_importance_list.sort(key=lambda x: x[1], reverse=True)
+
     return shap_importance_list
 
 def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=100):
@@ -161,17 +186,17 @@ def main():
     #X_bilstm, y_bilstm, _ = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
     #evaluate_bilstm(X_bilstm, y_bilstm, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
 
-    print("Random Forest:")
-    evaluate_model(RandomForestClassifier(random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
+    #print("Random Forest:")
+    #evaluate_model(RandomForestClassifier(random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
 
-    print("\nDecision Tree:")
-    evaluate_model(DecisionTreeClassifier(random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
+    #print("\nDecision Tree:")
+    #evaluate_model(DecisionTreeClassifier(random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
 
-    print("\nLogistic Regression:")
-    evaluate_model(LogisticRegression(max_iter=1000, random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
+    #print("\nLogistic Regression:")
+    #evaluate_model(LogisticRegression(max_iter=1000, random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
 
-    #print("\nNaive Bayes:")
-    #evaluate_model(MultinomialNB(), X, y, n_splits=10)
+    print("\nNaive Bayes:")
+    evaluate_model(MultinomialNB(), X, y, n_splits=10, vectorizer=vectorizer)
 
 
 
