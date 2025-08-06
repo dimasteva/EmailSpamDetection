@@ -16,6 +16,18 @@ import numpy as np
 import shap
 import matplotlib.pyplot as plt
 
+import re
+import nltk
+from nltk.corpus import stopwords
+nltk.download('stopwords')
+
+stop_words = set(stopwords.words('english'))
+
+def remove_stopwords(text):
+    words = re.findall(r'\b\w+\b', text.lower())
+    filtered = [word for word in words if word not in stop_words]
+    return ' '.join(filtered)
+
 def load_and_balance_data(filepath):
     df = pd.read_csv(filepath)
     df_majority = df[df['spam'] == df['spam'].value_counts().idxmax()]
@@ -145,18 +157,64 @@ def build_bilstm_model(max_words=5000, max_len=100):
     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
     return model
 
-def evaluate_bilstm(X, y, n_splits=10, epochs=3, batch_size=32, max_words=5000, max_len=100):
+def evaluate_bilstm(X, y, tokenizer, n_splits=10, epochs=3, batch_size=32, max_words=5000, max_len=100):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls = [], [], [], []
 
     for fold, (train_index, test_index) in enumerate(skf.split(X, y), 1):
+        print(f"\n--- Fold {fold} ---")
+
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
 
         model = build_bilstm_model(max_words=max_words, max_len=max_len)
         model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=0)
+
         y_pred_prob = model.predict(X_test)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+
+        try:
+            background = X_train[:50].astype('float32')
+            test_sample = X_test[:10].astype('float32')
+
+            explainer = shap.KernelExplainer(lambda x: model.predict(x).flatten(), background)
+            shap_values = explainer.shap_values(test_sample, nsamples=100)
+
+            if isinstance(shap_values, list) and len(shap_values) == 2:
+                shap_matrix = shap_values[1]
+            else:
+                shap_matrix = shap_values
+
+            if shap_matrix.ndim == 3:
+                shap_matrix = shap_matrix[:, 0, :]
+
+            shap_matrix = np.abs(shap_matrix)
+
+            if shap_matrix.shape != test_sample.shape:
+                print(f"[Fold {fold}] Oblik SHAP matrice {shap_matrix.shape} se ne poklapa sa ulazom {test_sample.shape}")
+            else:
+                word_shap_scores = np.zeros(max_words)
+                word_counts = np.zeros(max_words)
+
+                for i in range(test_sample.shape[0]):
+                    for j in range(test_sample.shape[1]):
+                        word_id = int(test_sample[i][j])
+                        if word_id != 0 and word_id < max_words:
+                            word_shap_scores[word_id] += shap_matrix[i][j]
+                            word_counts[word_id] += 1
+
+                mean_shap = word_shap_scores / (word_counts + 1e-8)
+                index_word = {v: k for k, v in tokenizer.word_index.items()}
+                used_word_scores = [(idx, mean_shap[idx]) for idx in range(1, max_words) if word_counts[idx] > 0]
+                used_word_scores = sorted(used_word_scores, key=lambda x: x[1], reverse=True)
+
+                print(f"\nTop 20 reci po SHAP znacaju (Fold {fold}):")
+                for idx, score in used_word_scores[:20]:
+                    word = index_word.get(idx, 'UNK')
+                    print(f"{word:<15} | SHAP: {score:.6f}")
+
+        except Exception as e:
+            print(f"[Fold {fold}] SHAP analiza nije uspela: {e}")
 
         acc = accuracy_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred)
@@ -168,23 +226,26 @@ def evaluate_bilstm(X, y, n_splits=10, epochs=3, batch_size=32, max_words=5000, 
         precisions.append(prec)
         recalls.append(rec)
 
-        print(f"Fold {fold}: Accuracy={acc:.3f}, F1={f1:.3f}, Precision={prec:.3f}, Recall={rec:.3f}")
+        print(f"Rezultati (Fold {fold}): Accuracy={acc:.3f}, F1={f1:.3f}, Precision={prec:.3f}, Recall={rec:.3f}")
 
-    print("\nProsecne metrike za svih 10 foldova (BiLSTM):")
-    print(f"Accuracy: {sum(accuracies)/len(accuracies):.3f}")
-    print(f"F1 score: {sum(f1_scores)/len(f1_scores):.3f}")
-    print(f"Precision: {sum(precisions)/len(precisions):.3f}")
-    print(f"Recall: {sum(recalls)/len(recalls):.3f}")
+    print("\n=== Prosecne metrike za svih 10 foldova (BiLSTM) ===")
+    print(f"Accuracy:  {np.mean(accuracies):.3f}")
+    print(f"F1 score:  {np.mean(f1_scores):.3f}")
+    print(f"Precision: {np.mean(precisions):.3f}")
+    print(f"Recall:    {np.mean(recalls):.3f}")
+
+
 
 def main():
     df_downsampled = load_and_balance_data('emails.csv')
     X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
 
-    #print("\nBi-LSTM:")
-    #max_words = 5000
-    #max_len = 100
-    #X_bilstm, y_bilstm, _ = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    #evaluate_bilstm(X_bilstm, y_bilstm, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
+    print("\nBi-LSTM:")
+    max_words = 5000
+    max_len = 100
+    df_downsampled['text'] = df_downsampled['text'].apply(remove_stopwords)
+    X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
+    evaluate_bilstm(X_bilstm, y_bilstm, tokenizer, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
 
     #print("Random Forest:")
     #evaluate_model(RandomForestClassifier(random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
@@ -195,8 +256,8 @@ def main():
     #print("\nLogistic Regression:")
     #evaluate_model(LogisticRegression(max_iter=1000, random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
 
-    print("\nNaive Bayes:")
-    evaluate_model(MultinomialNB(), X, y, n_splits=10, vectorizer=vectorizer)
+    #print("\nNaive Bayes:")
+    #evaluate_model(MultinomialNB(), X, y, n_splits=10, vectorizer=vectorizer)
 
 
 
