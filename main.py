@@ -43,7 +43,7 @@ def vectorize_text(df, text_column='text'):
     y = df['spam']
     return X, y, vectorizer
 
-def evaluate_model(model, X, y, n_splits=10, vectorizer=None):
+def evaluate_model(model, X, y, df, n_splits=10, vectorizer=None):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls = [], [], [], []
 
@@ -62,18 +62,38 @@ def evaluate_model(model, X, y, n_splits=10, vectorizer=None):
             print(f"\nTop 20 najvaznijih reci po SHAP znacaju ({model_name}):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {val:.5f}")
+
+            top_words = [word for word, _ in shap_importance]
+            train_texts = df.iloc[train_index]['text']
+            test_texts = df.iloc[test_index]['text']
+            k = find_k_for_target_accuracy(model.__class__, train_texts, test_texts, y_train, y_test, top_words)
+            print(f"[Fold {fold}] K = {k} reci je dovoljno za 80% tacnosti")
+
         elif isinstance(model, LogisticRegression) and vectorizer is not None:
             feature_names = vectorizer.get_feature_names_out()
             shap_importance = compute_shap_importance(model, X_train, feature_names)
             print("\nTop 20 najvaznijih reci po SHAP znacaju (Logistic Regression):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {val:.5f}")
+
+            top_words = [word for word, _ in shap_importance]
+            train_texts = df.iloc[train_index]['text']
+            test_texts = df.iloc[test_index]['text']
+            k = find_k_for_target_accuracy(model.__class__, train_texts, test_texts, y_train, y_test, top_words)
+            print(f"[Fold {fold}] K = {k} reci je dovoljno za 80% tacnosti")
+
         elif isinstance(model, MultinomialNB) and vectorizer is not None:
             feature_names = vectorizer.get_feature_names_out()
             shap_importance = compute_shap_importance_nb(model, X_train, feature_names)
             print("\nTop 20 najvaznijih reci po SHAP znacaju (Naive Bayes):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {float(val[0]):.5f}")
+            
+            top_words = [word for word, _ in shap_importance]
+            train_texts = df.iloc[train_index]['text']
+            test_texts = df.iloc[test_index]['text']
+            k = find_k_for_target_accuracy(model.__class__, train_texts, test_texts, y_train, y_test, top_words)
+            print(f"[Fold {fold}] K = {k} reci je dovoljno za 80% tacnosti")
 
         acc = accuracy_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred)
@@ -140,6 +160,23 @@ def compute_shap_importance_nb(model, X_sample, feature_names):
     shap_importance_list.sort(key=lambda x: x[1], reverse=True)
 
     return shap_importance_list
+
+def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8):
+    for k in range(1, len(top_words) + 1):
+        selected_words = top_words[:k]
+        vectorizer = TfidfVectorizer(vocabulary=selected_words)
+        X_train_k = vectorizer.fit_transform(train_texts)
+        X_test_k = vectorizer.transform(test_texts)
+
+        model = model_class()
+        model.fit(X_train_k, y_train)
+        y_pred = model.predict(X_test_k)
+        acc = accuracy_score(y_test, y_pred)
+        print(f"K={k}, Accuracy={acc:.3f}")
+
+        if acc >= accuracy_threshold:
+            return k
+    return None
 
 def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=100):
     tokenizer = Tokenizer(num_words=max_words)
@@ -240,24 +277,24 @@ def main():
     df_downsampled = load_and_balance_data('emails.csv')
     X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
 
-    print("\nBi-LSTM:")
-    max_words = 5000
-    max_len = 100
-    df_downsampled['text'] = df_downsampled['text'].apply(remove_stopwords)
-    X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    evaluate_bilstm(X_bilstm, y_bilstm, tokenizer, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
+    #print("\nBi-LSTM:")
+    #max_words = 5000
+    #max_len = 100
+    #df_downsampled['text'] = df_downsampled['text'].apply(remove_stopwords)
+    #X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
+    #evaluate_bilstm(X_bilstm, y_bilstm, tokenizer, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
 
-    #print("Random Forest:")
-    #evaluate_model(RandomForestClassifier(random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
+    print("Random Forest:")
+    evaluate_model(RandomForestClassifier(random_state=42), X, y, df_downsampled, n_splits=10, vectorizer=vectorizer)
 
     #print("\nDecision Tree:")
-    #evaluate_model(DecisionTreeClassifier(random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
+    #evaluate_model(DecisionTreeClassifier(random_state=42), X, y, df_downsampled, n_splits=10, vectorizer=vectorizer)
 
     #print("\nLogistic Regression:")
-    #evaluate_model(LogisticRegression(max_iter=1000, random_state=42), X, y, n_splits=10, vectorizer=vectorizer)
+    #evaluate_model(LogisticRegression(max_iter=1000, random_state=42), X, y, df_downsampled, n_splits=10, vectorizer=vectorizer)
 
     #print("\nNaive Bayes:")
-    #evaluate_model(MultinomialNB(), X, y, n_splits=10, vectorizer=vectorizer)
+    #evaluate_model(MultinomialNB(), X, y, df_downsampled, n_splits=10, vectorizer=vectorizer)
 
 
 
