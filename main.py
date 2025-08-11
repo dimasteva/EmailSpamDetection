@@ -216,8 +216,13 @@ def evaluate_bilstm(X, y, tokenizer, df, n_splits=10, epochs=3, batch_size=32, m
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
 
         try:
-            background = X_train[:50].astype('float32')
-            test_sample = X_test[:10].astype('float32')
+            np.random.seed(42)
+
+            background_indices = np.random.choice(len(X_train), size=10, replace=False)
+            background = X_train[background_indices].astype('float32')
+
+            test_sample_indices = np.random.choice(len(X_test), size=30, replace=False)
+            test_sample = X_test[test_sample_indices].astype('float32')
 
             explainer = shap.KernelExplainer(lambda x: model.predict(x).flatten(), background)
             shap_values = explainer.shap_values(test_sample, nsamples=100)
@@ -301,7 +306,6 @@ def find_k_for_bilstm(train_texts, test_texts, y_train, y_test, top_words, accur
 
         X_train_seq = pad_sequences(texts_to_sequences(train_texts), maxlen=max_len)
         X_test_seq = pad_sequences(texts_to_sequences(test_texts), maxlen=max_len)
-
         model = build_bilstm_model(max_words=k+1, max_len=max_len)
         model.fit(X_train_seq, y_train, epochs=3, batch_size=32, verbose=0)
 
