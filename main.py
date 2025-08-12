@@ -341,7 +341,7 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
         train_texts = [df['text'].iloc[i] for i in train_index]
         test_texts = [df['text'].iloc[i] for i in test_index]
 
-        k = find_k_for_bilstm(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8)
+        k = find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8)
         print(f"[Fold {fold}] K = {k} reci je dovoljno za 80% tacnosti")
         k_words.append(k)
 
@@ -355,9 +355,13 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
 
     return f1_scores, k_words
 
-def find_k_for_bilstm(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8, max_len=200):
-    for k in range(1, len(top_words) + 1):
-        selected_words = top_words[:k]
+def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8, max_len=200):
+    left, right = 1, len(top_words)
+    best_k = None
+
+    while left <= right:
+        mid = (left + right) // 2
+        selected_words = top_words[:mid]
         word_to_index = {word: i+1 for i, word in enumerate(selected_words)}
 
         def texts_to_sequences(texts):
@@ -370,17 +374,22 @@ def find_k_for_bilstm(train_texts, test_texts, y_train, y_test, top_words, accur
 
         X_train_seq = pad_sequences(texts_to_sequences(train_texts), maxlen=max_len)
         X_test_seq = pad_sequences(texts_to_sequences(test_texts), maxlen=max_len)
-        model = build_bilstm_model(max_words=k+1, max_len=max_len)
+        model = build_bilstm_model(max_words=mid+1, max_len=max_len)
         model.fit(X_train_seq, y_train, epochs=7, batch_size=32, verbose=0)
 
         y_pred_prob = model.predict(X_test_seq)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
         acc = accuracy_score(y_test, y_pred)
-        print(f"K={k}, Accuracy={acc:.3f}")
+        print(f"K={mid}, Accuracy={acc:.3f}")
 
         if acc >= accuracy_threshold:
-            return k
-    return None
+            best_k = mid
+            right = mid - 1
+        else:
+            left = mid + 1
+
+    return best_k
+
 
 
 
