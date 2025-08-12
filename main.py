@@ -11,6 +11,8 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Embedding, Bidirectional, LSTM, Dense
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.callbacks import EarlyStopping
+
 import numpy as np
 
 import shap
@@ -19,17 +21,31 @@ import matplotlib.pyplot as plt
 import re
 import nltk
 from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
 nltk.download('stopwords')
+nltk.download('wordnet')
+nltk.download('punkt')
 
 stop_words = set(stopwords.words('english'))
+lemmatizer = WordNetLemmatizer()
+
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'[^a-z\s]', ' ', text)
+    tokens = nltk.word_tokenize(text)
+    tokens = [lemmatizer.lemmatize(t) for t in tokens if t not in stop_words and len(t) > 1]
+    return ' '.join(tokens)
 
 def remove_stopwords(text):
     words = re.findall(r'\b\w+\b', text.lower())
     filtered = [word for word in words if word not in stop_words]
     return ' '.join(filtered)
 
-def load_and_balance_data(filepath):
+def load_and_balance_data(filepath, downsample=False):
     df = pd.read_csv(filepath)
+    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+    if not downsample:
+        return df
     df_majority = df[df['spam'] == df['spam'].value_counts().idxmax()]
     df_minority = df[df['spam'] == df['spam'].value_counts().idxmin()]
     df_majority_downsampled = df_majority.sample(n=len(df_minority), random_state=42)
@@ -43,13 +59,27 @@ def vectorize_text(df, text_column='text'):
     y = df['spam']
     return X, y, vectorizer
 
-def evaluate_model(model, X, y, df, n_splits=10, vectorizer=None):
+def evaluate_model(model, df, n_splits=10):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls, k_words = [], [], [], [], []
 
-    for fold, (train_index, test_index) in enumerate(skf.split(X, y), 1):
-        X_train, X_test = X[train_index], X[test_index]
-        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+    for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['spam']), 1):
+        train_texts = df.iloc[train_index]['text']
+        test_texts = df.iloc[test_index]['text']
+        y_train = df.iloc[train_index]['spam']
+        y_test = df.iloc[test_index]['spam']
+
+        vectorizer = TfidfVectorizer(
+            stop_words='english',
+            max_features=5000,
+            ngram_range=(1, 2),
+            min_df=2,
+            max_df=0.95,
+            norm='l2'
+        )
+
+        X_train = vectorizer.fit_transform(train_texts)
+        X_test = vectorizer.transform(test_texts)
 
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
@@ -183,7 +213,7 @@ def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_
             return k
     return None
 
-def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=100):
+def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=200):
     tokenizer = Tokenizer(num_words=max_words)
     tokenizer.fit_on_texts(df[text_column])
     sequences = tokenizer.texts_to_sequences(df[text_column])
@@ -191,38 +221,57 @@ def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=100):
     y = df['spam'].values
     return X, y, tokenizer
 
-def build_bilstm_model(max_words=5000, max_len=100):
+def build_bilstm_model(max_words=5000, max_len=200):
     model = Sequential()
-    model.add(Embedding(input_dim=max_words, output_dim=64, input_length=max_len))
-    model.add(Bidirectional(LSTM(32)))
+    model.add(Embedding(input_dim=max_words, output_dim=128, input_length=max_len))
+    model.add(Bidirectional(LSTM(64)))
     model.add(Dense(1, activation='sigmoid'))
     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
     return model
 
-def evaluate_bilstm(X, y, tokenizer, df, n_splits=10, epochs=3, batch_size=32, max_words=5000, max_len=100):
+def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, max_len=200):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls, k_words = [], [], [], [], []
 
-    for fold, (train_index, test_index) in enumerate(skf.split(X, y), 1):
+    for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['spam']), 1):
         print(f"\n--- Fold {fold} ---")
+        train_texts = df.iloc[train_index]['text']
+        test_texts = df.iloc[test_index]['text']
+        y_train = df.iloc[train_index]['spam'].values
+        y_test = df.iloc[test_index]['spam'].values
 
-        X_train, X_test = X[train_index], X[test_index]
-        y_train, y_test = y[train_index], y[test_index]
+        tokenizer = Tokenizer(num_words=max_words)
+        tokenizer.fit_on_texts(train_texts)
+
+        X_train_seq = tokenizer.texts_to_sequences(train_texts)
+        X_train_pad = pad_sequences(X_train_seq, maxlen=max_len)
+
+        X_test_seq = tokenizer.texts_to_sequences(test_texts)
+        X_test_pad = pad_sequences(X_test_seq, maxlen=max_len)
 
         model = build_bilstm_model(max_words=max_words, max_len=max_len)
-        model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=0)
+        early_stop = EarlyStopping(monitor='val_loss', patience=2, restore_best_weights=True)
 
-        y_pred_prob = model.predict(X_test)
+        model.fit(
+            X_train_pad, y_train,
+            validation_split=0.1,
+            epochs=epochs,
+            batch_size=batch_size,
+            callbacks=[early_stop],
+            verbose=1
+        )
+
+        y_pred_prob = model.predict(X_test_pad)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
 
         try:
             np.random.seed(42)
 
-            background_indices = np.random.choice(len(X_train), size=10, replace=False)
-            background = X_train[background_indices].astype('float32')
+            background_indices = np.random.choice(len(X_train_pad), size=10, replace=False)
+            background = X_train_pad[background_indices].astype('float32')
 
-            test_sample_indices = np.random.choice(len(X_test), size=30, replace=False)
-            test_sample = X_test[test_sample_indices].astype('float32')
+            test_sample_indices = np.random.choice(len(X_test_pad), size=30, replace=False)
+            test_sample = X_test_pad[test_sample_indices].astype('float32')
 
             explainer = shap.KernelExplainer(lambda x: model.predict(x).flatten(), background)
             shap_values = explainer.shap_values(test_sample, nsamples=100)
@@ -291,7 +340,7 @@ def evaluate_bilstm(X, y, tokenizer, df, n_splits=10, epochs=3, batch_size=32, m
 
     return f1_scores, k_words
 
-def find_k_for_bilstm(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8, max_len=100):
+def find_k_for_bilstm(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8, max_len=200):
     for k in range(1, len(top_words) + 1):
         selected_words = top_words[:k]
         word_to_index = {word: i+1 for i, word in enumerate(selected_words)}
@@ -307,7 +356,7 @@ def find_k_for_bilstm(train_texts, test_texts, y_train, y_test, top_words, accur
         X_train_seq = pad_sequences(texts_to_sequences(train_texts), maxlen=max_len)
         X_test_seq = pad_sequences(texts_to_sequences(test_texts), maxlen=max_len)
         model = build_bilstm_model(max_words=k+1, max_len=max_len)
-        model.fit(X_train_seq, y_train, epochs=3, batch_size=32, verbose=0)
+        model.fit(X_train_seq, y_train, epochs=7, batch_size=32, verbose=0)
 
         y_pred_prob = model.predict(X_test_seq)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
@@ -321,34 +370,34 @@ def find_k_for_bilstm(train_texts, test_texts, y_train, y_test, top_words, accur
 
 
 def main():
-    df_downsampled = load_and_balance_data('emails.csv')
-    df_downsampled['text'] = df_downsampled['text'].apply(remove_stopwords)
+    df_downsampled = load_and_balance_data('emails.csv', downsample=True)
+    df_downsampled['text'] = df_downsampled['text'].apply(clean_text)
 
     results = []
 
     print("\n=== Bi-LSTM ===")
     max_words = 5000
-    max_len = 100
-    X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    f1_bilstm, k_bilstm = evaluate_bilstm(X_bilstm, y_bilstm, tokenizer, df_downsampled, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
+    max_len = 200
+    #X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
+    f1_bilstm, k_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=7, batch_size=32, max_words=max_words, max_len=max_len)
     results.append(('BiLSTM', f1_bilstm, k_bilstm))
 
-    X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
+    #X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
 
     print("\n--- Random Forest ---")
-    f1_rf, k_rf = evaluate_model(RandomForestClassifier(random_state=42), X, y, df_downsampled, n_splits=10, vectorizer=vectorizer)
+    f1_rf, k_rf = evaluate_model(RandomForestClassifier(random_state=42), df_downsampled, n_splits=10)
     results.append(('Random Forest', f1_rf, k_rf))
 
     print("\n--- Decision Tree ---")
-    f1_dt, k_dt = evaluate_model(DecisionTreeClassifier(random_state=42), X, y, df_downsampled, n_splits=10, vectorizer=vectorizer)
+    f1_dt, k_dt = evaluate_model(DecisionTreeClassifier(random_state=42), df_downsampled, n_splits=10)
     results.append(('Decision Tree', f1_dt, k_dt))
 
     print("\n--- Logistic Regression ---")
-    f1_lr, k_lr = evaluate_model(LogisticRegression(max_iter=1000, random_state=42), X, y, df_downsampled, n_splits=10, vectorizer=vectorizer)
+    f1_lr, k_lr = evaluate_model(LogisticRegression(max_iter=1000, random_state=42), df_downsampled, n_splits=10)
     results.append(('Logistic Regression', f1_lr, k_lr))
 
     print("\n--- Naive Bayes ---")
-    f1_nb, k_nb = evaluate_model(MultinomialNB(), X, y, df_downsampled, n_splits=10, vectorizer=vectorizer)
+    f1_nb, k_nb = evaluate_model(MultinomialNB(), df_downsampled, n_splits=10)
     results.append(('Naive Bayes', f1_nb, k_nb))
 
     summary_data = []
