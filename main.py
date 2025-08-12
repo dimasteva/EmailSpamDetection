@@ -393,7 +393,7 @@ def main():
     print("\n=== Bi-LSTM ===")
     max_words = 5000
     max_len = 200
-    #X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
+    # X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
     f1_bilstm, k_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=7, batch_size=32, max_words=max_words, max_len=max_len)
     results.append(('BiLSTM', f1_bilstm, k_bilstm))
 
