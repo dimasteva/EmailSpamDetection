@@ -24,7 +24,7 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 nltk.download('stopwords')
 nltk.download('wordnet')
-nltk.download('punkt')
+nltk.download('punkt_tab')
 
 stop_words = set(stopwords.words('english'))
 lemmatizer = WordNetLemmatizer()
@@ -196,22 +196,34 @@ def compute_shap_importance_nb(model, X_sample, feature_names):
 
     return shap_importance_list
 
-def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8):
-    for k in range(1, len(top_words) + 1):
-        selected_words = top_words[:k]
-        vectorizer = TfidfVectorizer(vocabulary=selected_words)
-        X_train_k = vectorizer.fit_transform(train_texts)
-        X_test_k = vectorizer.transform(test_texts)
 
+def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8):
+    vectorizer = TfidfVectorizer(vocabulary=top_words)
+    X_train_full = vectorizer.fit_transform(train_texts).toarray()
+    X_test_full = vectorizer.transform(test_texts).toarray()
+    
+    left, right = 1, len(top_words)
+    best_k = None
+
+    while left <= right:
+        mid = (left + right) // 2
+        X_train_k = X_train_full[:, :mid]
+        X_test_k = X_test_full[:, :mid]
+        
         model = model_class()
         model.fit(X_train_k, y_train)
         y_pred = model.predict(X_test_k)
         acc = accuracy_score(y_test, y_pred)
-        print(f"K={k}, Accuracy={acc:.3f}")
-
+        
+        print(f"K={mid}, Accuracy={acc:.3f}")
+        
         if acc >= accuracy_threshold:
-            return k
-    return None
+            best_k = mid
+            right = mid - 1
+        else:
+            left = mid + 1
+    
+    return best_k
 
 def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=200):
     tokenizer = Tokenizer(num_words=max_words)
@@ -263,6 +275,9 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
 
         y_pred_prob = model.predict(X_test_pad)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+
+        used_word_scores = []
+        index_word = {}
 
         try:
             np.random.seed(42)
