@@ -43,6 +43,7 @@ def remove_stopwords(text):
 
 def load_and_balance_data(filepath, downsample=False):
     df = pd.read_csv(filepath)
+    df = df.dropna(subset=['text'])
     df = df.sample(frac=1, random_state=42).reset_index(drop=True)
     if not downsample:
         return df
@@ -375,7 +376,7 @@ def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, to
         X_train_seq = pad_sequences(texts_to_sequences(train_texts), maxlen=max_len)
         X_test_seq = pad_sequences(texts_to_sequences(test_texts), maxlen=max_len)
         model = build_bilstm_model(max_words=mid+1, max_len=max_len)
-        model.fit(X_train_seq, y_train, epochs=7, batch_size=32, verbose=0)
+        model.fit(X_train_seq, y_train, epochs=3, batch_size=32, verbose=0)
 
         y_pred_prob = model.predict(X_test_seq)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
@@ -394,35 +395,39 @@ def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, to
 
 
 def main():
-    df_downsampled = load_and_balance_data('emails.csv', downsample=True)
+    df_downsampled = load_and_balance_data('podaci_izmenjeni.csv', downsample=True)
     df_downsampled['text'] = df_downsampled['text'].apply(clean_text)
+
+    counts = df_downsampled["spam"].value_counts()
+    print(f"Broj 1 (spam): {counts.get(1, 0)}")
+    print(f"Broj 0 (ham): {counts.get(0, 0)}")
 
     results = []
 
-    print("\n=== Bi-LSTM ===")
-    max_words = 5000
-    max_len = 200
+    #print("\n=== Bi-LSTM ===")
+    #max_words = 5000
+    #max_len = 100
     # X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    f1_bilstm, k_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=7, batch_size=32, max_words=max_words, max_len=max_len)
-    results.append(('BiLSTM', f1_bilstm, k_bilstm))
+    #f1_bilstm, k_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
+    #results.append(('BiLSTM', f1_bilstm, k_bilstm))
 
     #X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
 
     print("\n--- Random Forest ---")
-    f1_rf, k_rf = evaluate_model(RandomForestClassifier(random_state=42), df_downsampled, n_splits=10)
+    f1_rf, k_rf = evaluate_model(RandomForestClassifier(n_estimators=100, max_depth=20, max_features='sqrt', min_samples_split=5, min_samples_leaf=2, bootstrap=True, random_state=42, n_jobs=-1), df_downsampled, n_splits=10)
     results.append(('Random Forest', f1_rf, k_rf))
 
-    print("\n--- Decision Tree ---")
-    f1_dt, k_dt = evaluate_model(DecisionTreeClassifier(random_state=42), df_downsampled, n_splits=10)
-    results.append(('Decision Tree', f1_dt, k_dt))
+    #print("\n--- Decision Tree ---")
+    #f1_dt, k_dt = evaluate_model(DecisionTreeClassifier(random_state=42), df_downsampled, n_splits=10)
+    #results.append(('Decision Tree', f1_dt, k_dt))
 
-    print("\n--- Logistic Regression ---")
-    f1_lr, k_lr = evaluate_model(LogisticRegression(max_iter=1000, random_state=42), df_downsampled, n_splits=10)
-    results.append(('Logistic Regression', f1_lr, k_lr))
+    #print("\n--- Logistic Regression ---")
+    #f1_lr, k_lr = evaluate_model(LogisticRegression(max_iter=1000, random_state=42), df_downsampled, n_splits=10)
+    #results.append(('Logistic Regression', f1_lr, k_lr))
 
-    print("\n--- Naive Bayes ---")
-    f1_nb, k_nb = evaluate_model(MultinomialNB(), df_downsampled, n_splits=10)
-    results.append(('Naive Bayes', f1_nb, k_nb))
+    #print("\n--- Naive Bayes ---")
+    #f1_nb, k_nb = evaluate_model(MultinomialNB(), df_downsampled, n_splits=10)
+    #results.append(('Naive Bayes', f1_nb, k_nb))
 
     summary_data = []
     for model_name, f1_list, k_list in results:
