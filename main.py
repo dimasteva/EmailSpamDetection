@@ -64,6 +64,11 @@ def evaluate_model(model, df, n_splits=10):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls, k_words = [], [], [], [], []
 
+    # Ucitamo emails.csv samo jednom (proveravamo na drugom datasetu)
+    emails_df = pd.read_csv("novi2.csv")
+    emails_texts = emails_df['text']
+    emails_labels = emails_df['spam']
+
     for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['spam']), 1):
         train_texts = df.iloc[train_index]['text']
         test_texts = df.iloc[test_index]['text']
@@ -84,6 +89,18 @@ def evaluate_model(model, df, n_splits=10):
 
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
+
+        # Testiranje na emails.csv
+        emails_texts = emails_df['text'].fillna("")
+        X_emails = vectorizer.transform(emails_texts)
+        y_emails_pred = model.predict(X_emails)
+
+        emails_acc = accuracy_score(emails_labels, y_emails_pred)
+        emails_f1 = f1_score(emails_labels, y_emails_pred)
+        emails_prec = precision_score(emails_labels, y_emails_pred)
+        emails_rec = recall_score(emails_labels, y_emails_pred)
+
+        print(f"[Fold {fold} - Emails.csv] Accuracy={emails_acc:.3f}, F1={emails_f1:.3f}, Precision={emails_prec:.3f}, Recall={emails_rec:.3f}")
 
           # SHAP analiza
         if (isinstance(model, RandomForestClassifier) or isinstance(model, DecisionTreeClassifier)) and vectorizer is not None:
@@ -121,7 +138,7 @@ def evaluate_model(model, df, n_splits=10):
             print("\nTop 20 najvaznijih reci po SHAP znacaju (Naive Bayes):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {float(val[0]):.5f}")
-            
+
             top_words = [word for word, _ in shap_importance]
             train_texts = df.iloc[train_index]['text']
             test_texts = df.iloc[test_index]['text']
@@ -161,7 +178,7 @@ def compute_shap_importance(model, X_sample, feature_names):
 
 def compute_shap_importance_rf_dt(model, X_sample, feature_names):
     X_sample_dense = X_sample.toarray() if hasattr(X_sample, "toarray") else X_sample
-    
+
     background = shap.sample(X_sample_dense, 50, random_state=42)
     explainer = shap.TreeExplainer(model, data=background, feature_perturbation="interventional")
 
@@ -175,7 +192,7 @@ def compute_shap_importance_rf_dt(model, X_sample, feature_names):
 
     shap_importance_list = list(zip(feature_names, mean_abs_shap))
     shap_importance_list.sort(key=lambda x: x[1], reverse=True)
-    
+
     return shap_importance_list
 
 def compute_shap_importance_nb(model, X_sample, feature_names):
@@ -202,7 +219,7 @@ def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_
     vectorizer = TfidfVectorizer(vocabulary=top_words)
     X_train_full = vectorizer.fit_transform(train_texts).toarray()
     X_test_full = vectorizer.transform(test_texts).toarray()
-    
+
     left, right = 1, len(top_words)
     best_k = None
 
@@ -210,20 +227,20 @@ def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_
         mid = (left + right) // 2
         X_train_k = X_train_full[:, :mid]
         X_test_k = X_test_full[:, :mid]
-        
+
         model = model_class()
         model.fit(X_train_k, y_train)
         y_pred = model.predict(X_test_k)
         acc = accuracy_score(y_test, y_pred)
-        
+
         print(f"K={mid}, Accuracy={acc:.3f}")
-        
+
         if acc >= accuracy_threshold:
             best_k = mid
             right = mid - 1
         else:
             left = mid + 1
-    
+
     return best_k
 
 def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=200):
@@ -245,6 +262,10 @@ def build_bilstm_model(max_words=5000, max_len=200):
 def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, max_len=200):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls, k_words = [], [], [], [], []
+
+    emails_df = pd.read_csv("novi2.csv")
+    emails_texts = emails_df['text']
+    emails_labels = emails_df['spam']
 
     for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['spam']), 1):
         print(f"\n--- Fold {fold} ---")
@@ -276,6 +297,22 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
 
         y_pred_prob = model.predict(X_test_pad)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+
+        emails_texts = emails_df['text'].fillna("")
+        emails_seq = tokenizer.texts_to_sequences(emails_texts)
+        emails_pad = pad_sequences(emails_seq, maxlen=max_len)
+
+        # Predikcija nad emailovima
+        y_emails_pred_prob = model.predict(emails_pad)
+        y_emails_pred = (y_emails_pred_prob > 0.5).astype(int).flatten()
+
+        emails_acc = accuracy_score(emails_labels, y_emails_pred)
+        emails_f1 = f1_score(emails_labels, y_emails_pred)
+        emails_prec = precision_score(emails_labels, y_emails_pred)
+        emails_rec = recall_score(emails_labels, y_emails_pred)
+
+
+        print(f"[Fold {fold} - Emails.csv] Accuracy={emails_acc:.3f}, F1={emails_f1:.3f}, Precision={emails_prec:.3f}, Recall={emails_rec:.3f}")
 
         used_word_scores = []
         index_word = {}
@@ -402,26 +439,26 @@ def main():
 
     results = []
 
-    print("\n=== Bi-LSTM ===")
-    max_words = 5000
-    max_len = 100
+    #print("\n=== Bi-LSTM ===")
+    #max_words = 5000
+    #max_len = 100
     # X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    f1_bilstm, k_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
-    results.append(('BiLSTM', f1_bilstm, k_bilstm))
+    #f1_bilstm, k_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
+    #results.append(('BiLSTM', f1_bilstm, k_bilstm))
 
     #X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
 
-    print("\n--- Random Forest ---")
-    f1_rf, k_rf = evaluate_model(RandomForestClassifier(n_estimators=200, criterion='gini', max_depth=None, min_samples_split=2, min_samples_leaf=1, max_features='sqrt', bootstrap=True, oob_score=True, n_jobs=-1, random_state=42), df_downsampled, n_splits=10)
-    results.append(('Random Forest', f1_rf, k_rf))
+    #print("\n--- Random Forest ---")
+    #f1_rf, k_rf = evaluate_model(RandomForestClassifier(n_estimators=100, criterion='gini', max_depth=10, min_samples_split=2, min_samples_leaf=1, max_features='sqrt', bootstrap=True, oob_score=True, n_jobs=-1, random_state=42), df_downsampled, n_splits=10)
+    #results.append(('Random Forest', f1_rf, k_rf))
 
-    print("\n--- Decision Tree ---")
-    f1_dt, k_dt = evaluate_model(DecisionTreeClassifier(criterion='gini', splitter='best', max_depth=25, min_samples_split=5, min_samples_leaf=2, min_impurity_decrease=0.001, ccp_alpha=0.001, random_state=42), df_downsampled, n_splits=10)
-    results.append(('Decision Tree', f1_dt, k_dt))
+    #print("\n--- Decision Tree ---")
+    #f1_dt, k_dt = evaluate_model(DecisionTreeClassifier(criterion='gini', splitter='best', max_depth=25, min_samples_split=5, min_samples_leaf=2, min_impurity_decrease=0.001, ccp_alpha=0.001, random_state=42), df_downsampled, n_splits=10)
+    #results.append(('Decision Tree', f1_dt, k_dt))
 
-    print("\n--- Logistic Regression ---")
-    f1_lr, k_lr = evaluate_model(LogisticRegression(penalty='l2', C=1.0, solver='saga', max_iter=1000, class_weight=None, multi_class='ovr', random_state=42, n_jobs=-1), df_downsampled, n_splits=10)
-    results.append(('Logistic Regression', f1_lr, k_lr))
+    #print("\n--- Logistic Regression ---")
+    #f1_lr, k_lr = evaluate_model(LogisticRegression(penalty='l2', C=1.0, solver='saga', max_iter=1000, class_weight=None, multi_class='ovr', random_state=42, n_jobs=-1), df_downsampled, n_splits=10)
+    #results.append(('Logistic Regression', f1_lr, k_lr))
 
     print("\n--- Naive Bayes ---")
     f1_nb, k_nb = evaluate_model(MultinomialNB(alpha=1.0, force_alpha=True, fit_prior=True, class_prior=None), df_downsampled, n_splits=10)
