@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import friedmanchisquare, pearsonr, spearmanr
 import scikit_posthocs as sp
 
-df = pd.read_csv('results_summary1.csv')
+df = pd.read_csv('70kresults.csv')
 
 f1_pivot = df.pivot(index='Fold', columns='Model', values='F1 Score')
 k_pivot = df.pivot(index='Fold', columns='Model', values='K Words')

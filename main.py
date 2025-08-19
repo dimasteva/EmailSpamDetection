@@ -62,12 +62,12 @@ def vectorize_text(df, text_column='text'):
 
 def evaluate_model(model, df, n_splits=10):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    accuracies, f1_scores, precisions, recalls, k_words = [], [], [], [], []
+    accuracies, f1_scores, precisions, recalls, k_words, top_words_list = [], [], [], [], [], []
 
-    # Ucitamo emails.csv samo jednom (proveravamo na drugom datasetu)
-    emails_df = pd.read_csv("novi2.csv")
-    emails_texts = emails_df['text']
-    emails_labels = emails_df['spam']
+    # Učitamo emails.csv samo jednom
+    #emails_df = pd.read_csv("novi2.csv")
+    #emails_texts = emails_df['text']
+    #emails_labels = emails_df['spam']
 
     for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['spam']), 1):
         train_texts = df.iloc[train_index]['text']
@@ -85,22 +85,22 @@ def evaluate_model(model, df, n_splits=10):
         )
 
         X_train = vectorizer.fit_transform(train_texts)
+        #emails_texts = emails_df['text'].fillna("")
         X_test = vectorizer.transform(test_texts)
 
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
 
         # Testiranje na emails.csv
-        emails_texts = emails_df['text'].fillna("")
-        X_emails = vectorizer.transform(emails_texts)
-        y_emails_pred = model.predict(X_emails)
+        #X_emails = vectorizer.transform(emails_texts)
+        #y_emails_pred = model.predict(X_emails)
 
-        emails_acc = accuracy_score(emails_labels, y_emails_pred)
-        emails_f1 = f1_score(emails_labels, y_emails_pred)
-        emails_prec = precision_score(emails_labels, y_emails_pred)
-        emails_rec = recall_score(emails_labels, y_emails_pred)
+        #emails_acc = accuracy_score(emails_labels, y_emails_pred)
+        #emails_f1 = f1_score(emails_labels, y_emails_pred)
+        #emails_prec = precision_score(emails_labels, y_emails_pred)
+        #emails_rec = recall_score(emails_labels, y_emails_pred)
 
-        print(f"[Fold {fold} - Emails.csv] Accuracy={emails_acc:.3f}, F1={emails_f1:.3f}, Precision={emails_prec:.3f}, Recall={emails_rec:.3f}")
+        #print(f"[Fold {fold} - Emails.csv] Accuracy={emails_acc:.3f}, F1={emails_f1:.3f}, Precision={emails_prec:.3f}, Recall={emails_rec:.3f}")
 
           # SHAP analiza
         if (isinstance(model, RandomForestClassifier) or isinstance(model, DecisionTreeClassifier)) and vectorizer is not None:
@@ -110,11 +110,13 @@ def evaluate_model(model, df, n_splits=10):
             print(f"\nTop 20 najvaznijih reci po SHAP znacaju ({model_name}):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {val:.5f}")
+            top_20_words = [word for word, _ in shap_importance[:20]]
+            top_words_list.append(top_20_words)
 
             top_words = [word for word, _ in shap_importance]
             train_texts = df.iloc[train_index]['text']
             test_texts = df.iloc[test_index]['text']
-            k = find_k_for_target_accuracy(model.__class__, train_texts, test_texts, y_train, y_test, top_words)
+            k = find_k_for_target_accuracy(model, train_texts, test_texts, y_train, y_test, top_words)
             print(f"[Fold {fold}] K = {k} reci je dovoljno za 80% tacnosti")
             k_words.append(k)
 
@@ -124,11 +126,13 @@ def evaluate_model(model, df, n_splits=10):
             print("\nTop 20 najvaznijih reci po SHAP znacaju (Logistic Regression):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {val:.5f}")
+            top_20_words = [word for word, _ in shap_importance[:20]]
+            top_words_list.append(top_20_words)
 
             top_words = [word for word, _ in shap_importance]
             train_texts = df.iloc[train_index]['text']
             test_texts = df.iloc[test_index]['text']
-            k = find_k_for_target_accuracy(model.__class__, train_texts, test_texts, y_train, y_test, top_words)
+            k = find_k_for_target_accuracy(model, train_texts, test_texts, y_train, y_test, top_words)
             print(f"[Fold {fold}] K = {k} reci je dovoljno za 80% tacnosti")
             k_words.append(k)
 
@@ -138,11 +142,13 @@ def evaluate_model(model, df, n_splits=10):
             print("\nTop 20 najvaznijih reci po SHAP znacaju (Naive Bayes):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {float(val[0]):.5f}")
+            top_20_words = [word for word, _ in shap_importance[:20]]
+            top_words_list.append(top_20_words)
 
             top_words = [word for word, _ in shap_importance]
             train_texts = df.iloc[train_index]['text']
             test_texts = df.iloc[test_index]['text']
-            k = find_k_for_target_accuracy(model.__class__, train_texts, test_texts, y_train, y_test, top_words)
+            k = find_k_for_target_accuracy(model, train_texts, test_texts, y_train, y_test, top_words)
             print(f"[Fold {fold}] K = {k} reci je dovoljno za 80% tacnosti")
             k_words.append(k)
 
@@ -164,7 +170,7 @@ def evaluate_model(model, df, n_splits=10):
     print(f"Precision: {sum(precisions)/len(precisions):.3f}")
     print(f"Recall: {sum(recalls)/len(recalls):.3f}")
 
-    return f1_scores, k_words
+    return f1_scores, k_words, top_words_list
 
 def compute_shap_importance(model, X_sample, feature_names):
     explainer = shap.Explainer(model, X_sample, feature_names=feature_names)
@@ -215,7 +221,7 @@ def compute_shap_importance_nb(model, X_sample, feature_names):
     return shap_importance_list
 
 
-def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8):
+def find_k_for_target_accuracy(model_template, train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8):
     vectorizer = TfidfVectorizer(vocabulary=top_words)
     X_train_full = vectorizer.fit_transform(train_texts).toarray()
     X_test_full = vectorizer.transform(test_texts).toarray()
@@ -223,12 +229,14 @@ def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_
     left, right = 1, len(top_words)
     best_k = None
 
+    model_params = model_template.get_params()
+
     while left <= right:
         mid = (left + right) // 2
         X_train_k = X_train_full[:, :mid]
         X_test_k = X_test_full[:, :mid]
 
-        model = model_class()
+        model = model_template.__class__(**model_params)
         model.fit(X_train_k, y_train)
         y_pred = model.predict(X_test_k)
         acc = accuracy_score(y_test, y_pred)
@@ -242,6 +250,8 @@ def find_k_for_target_accuracy(model_class, train_texts, test_texts, y_train, y_
             left = mid + 1
 
     return best_k
+
+
 
 def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=200):
     tokenizer = Tokenizer(num_words=max_words)
@@ -261,11 +271,7 @@ def build_bilstm_model(max_words=5000, max_len=200):
 
 def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, max_len=200):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    accuracies, f1_scores, precisions, recalls, k_words = [], [], [], [], []
-
-    emails_df = pd.read_csv("novi2.csv")
-    emails_texts = emails_df['text']
-    emails_labels = emails_df['spam']
+    accuracies, f1_scores, precisions, recalls, k_words, top_words_all = [], [], [], [], [], []
 
     for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['spam']), 1):
         print(f"\n--- Fold {fold} ---")
@@ -298,29 +304,13 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
         y_pred_prob = model.predict(X_test_pad)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
 
-        emails_texts = emails_df['text'].fillna("")
-        emails_seq = tokenizer.texts_to_sequences(emails_texts)
-        emails_pad = pad_sequences(emails_seq, maxlen=max_len)
-
-        # Predikcija nad emailovima
-        y_emails_pred_prob = model.predict(emails_pad)
-        y_emails_pred = (y_emails_pred_prob > 0.5).astype(int).flatten()
-
-        emails_acc = accuracy_score(emails_labels, y_emails_pred)
-        emails_f1 = f1_score(emails_labels, y_emails_pred)
-        emails_prec = precision_score(emails_labels, y_emails_pred)
-        emails_rec = recall_score(emails_labels, y_emails_pred)
-
-
-        print(f"[Fold {fold} - Emails.csv] Accuracy={emails_acc:.3f}, F1={emails_f1:.3f}, Precision={emails_prec:.3f}, Recall={emails_rec:.3f}")
-
         used_word_scores = []
         index_word = {}
 
         try:
             np.random.seed(42)
 
-            background_indices = np.random.choice(len(X_train_pad), size=10, replace=False)
+            background_indices = np.random.choice(len(X_train_pad), size=50, replace=False)
             background = X_train_pad[background_indices].astype('float32')
 
             test_sample_indices = np.random.choice(len(X_test_pad), size=30, replace=False)
@@ -376,6 +366,8 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
         recalls.append(rec)
 
         top_words = [index_word[idx] for idx, _ in used_word_scores]
+        top_words_all.append(top_words[:20])
+
         train_texts = [df['text'].iloc[i] for i in train_index]
         test_texts = [df['text'].iloc[i] for i in test_index]
 
@@ -391,7 +383,7 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
     print(f"Precision: {np.mean(precisions):.3f}")
     print(f"Recall:    {np.mean(recalls):.3f}")
 
-    return f1_scores, k_words
+    return f1_scores, k_words, top_words_all
 
 def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8, max_len=200):
     left, right = 1, len(top_words)
@@ -413,7 +405,7 @@ def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, to
         X_train_seq = pad_sequences(texts_to_sequences(train_texts), maxlen=max_len)
         X_test_seq = pad_sequences(texts_to_sequences(test_texts), maxlen=max_len)
         model = build_bilstm_model(max_words=mid+1, max_len=max_len)
-        model.fit(X_train_seq, y_train, epochs=3, batch_size=32, verbose=0)
+        model.fit(X_train_seq, y_train, epochs=7, batch_size=32, verbose=0)
 
         y_pred_prob = model.predict(X_test_seq)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
@@ -430,7 +422,7 @@ def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, to
 
 
 def main():
-    df_downsampled = load_and_balance_data('podaci_izmenjeni.csv', downsample=True)
+    df_downsampled = load_and_balance_data('dataset70k_cleaned_enron.csv', downsample=True)
     df_downsampled['text'] = df_downsampled['text'].apply(clean_text)
 
     counts = df_downsampled["spam"].value_counts()
@@ -441,38 +433,40 @@ def main():
 
     #print("\n=== Bi-LSTM ===")
     #max_words = 5000
-    #max_len = 100
+    #max_len = 200
     # X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    #f1_bilstm, k_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=3, batch_size=32, max_words=max_words, max_len=max_len)
-    #results.append(('BiLSTM', f1_bilstm, k_bilstm))
+    #f1_bilstm, k_bilstm, top_words_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=7, batch_size=32, max_words=max_words, max_len=max_len)
+    #results.append(('BiLSTM', f1_bilstm, k_bilstm, top_words_bilstm))
 
     #X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
 
     #print("\n--- Random Forest ---")
-    #f1_rf, k_rf = evaluate_model(RandomForestClassifier(n_estimators=100, criterion='gini', max_depth=10, min_samples_split=2, min_samples_leaf=1, max_features='sqrt', bootstrap=True, oob_score=True, n_jobs=-1, random_state=42), df_downsampled, n_splits=10)
-    #results.append(('Random Forest', f1_rf, k_rf))
+    #f1_rf, k_rf, top_words_rf = evaluate_model(RandomForestClassifier(n_estimators=100, criterion='gini', max_depth=10, min_samples_split=2, min_samples_leaf=1, max_features='sqrt', bootstrap=True, oob_score=True, n_jobs=-1, random_state=42), df_downsampled, n_splits=10)
+    #results.append(('Random Forest', f1_rf, k_rf, top_words_rf))
 
     #print("\n--- Decision Tree ---")
-    #f1_dt, k_dt = evaluate_model(DecisionTreeClassifier(criterion='gini', splitter='best', max_depth=25, min_samples_split=5, min_samples_leaf=2, min_impurity_decrease=0.001, ccp_alpha=0.001, random_state=42), df_downsampled, n_splits=10)
-    #results.append(('Decision Tree', f1_dt, k_dt))
+    #f1_dt, k_dt, top_words_dt = evaluate_model(DecisionTreeClassifier(criterion='gini', splitter='best', max_depth=25, min_samples_split=5, min_samples_leaf=2, min_impurity_decrease=0.001, ccp_alpha=0.001, random_state=42), df_downsampled, n_splits=10)
+    #results.append(('Decision Tree', f1_dt, k_dt, top_words_dt))
 
-    #print("\n--- Logistic Regression ---")
-    #f1_lr, k_lr = evaluate_model(LogisticRegression(penalty='l2', C=1.0, solver='saga', max_iter=1000, class_weight=None, multi_class='ovr', random_state=42, n_jobs=-1), df_downsampled, n_splits=10)
-    #results.append(('Logistic Regression', f1_lr, k_lr))
+    print("\n--- Logistic Regression ---")
+    f1_lr, k_lr, top_words_lr = evaluate_model(LogisticRegression(penalty='l2', C=100, solver='saga', max_iter=2000, class_weight=None, multi_class='ovr', random_state=42, n_jobs=-1), df_downsampled, n_splits=10)
+    results.append(('Logistic Regression', f1_lr, k_lr, top_words_lr))
 
-    print("\n--- Naive Bayes ---")
-    f1_nb, k_nb = evaluate_model(MultinomialNB(alpha=1.0, force_alpha=True, fit_prior=True, class_prior=None), df_downsampled, n_splits=10)
-    results.append(('Naive Bayes', f1_nb, k_nb))
+    #print("\n--- Naive Bayes ---")
+    #f1_nb, k_nb, top_words_nb = evaluate_model(MultinomialNB(alpha=1.0, force_alpha=True, fit_prior=True, class_prior=None), df_downsampled, n_splits=10)
+    #results.append(('Naive Bayes', f1_nb, k_nb, top_words_nb))
 
     summary_data = []
-    for model_name, f1_list, k_list in results:
-        for fold, (f1, k) in enumerate(zip(f1_list, k_list), 1):
+    for model_name, f1_list, k_list, top_words_all in results:
+        for fold, (f1, k, top_words) in enumerate(zip(f1_list, k_list, top_words_all), 1):
             summary_data.append({
                 'Model': model_name,
                 'Fold': fold,
                 'F1 Score': round(f1, 4),
-                'K Words': k
+                'K Words': k,
+                'Top 20 Words': ", ".join(top_words)
             })
+
 
     summary_df = pd.DataFrame(summary_data)
     print("\n=== Rezime svih modela ===")
