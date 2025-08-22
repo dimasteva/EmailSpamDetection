@@ -77,7 +77,7 @@ def evaluate_model(model, df, n_splits=10):
 
         vectorizer = TfidfVectorizer(
             stop_words='english',
-            max_features=5000,
+            max_features=5000, #manje za nb
             ngram_range=(1, 2),
             min_df=2,
             max_df=0.95,
@@ -105,7 +105,7 @@ def evaluate_model(model, df, n_splits=10):
           # SHAP analiza
         if (isinstance(model, RandomForestClassifier) or isinstance(model, DecisionTreeClassifier)) and vectorizer is not None:
             feature_names = vectorizer.get_feature_names_out()
-            shap_importance = compute_shap_importance_rf_dt(model, X_train, feature_names)
+            shap_importance = compute_shap_importance_rf_dt(model, X_train, X_test, feature_names)
             model_name = type(model).__name__.replace("Classifier", "").replace("RandomForest", "Random Forest").replace("DecisionTree", "Decision Tree")
             print(f"\nTop 20 najvaznijih reci po SHAP znacaju ({model_name}):")
             for word, val in shap_importance[:20]:
@@ -122,7 +122,7 @@ def evaluate_model(model, df, n_splits=10):
 
         elif isinstance(model, LogisticRegression) and vectorizer is not None:
             feature_names = vectorizer.get_feature_names_out()
-            shap_importance = compute_shap_importance(model, X_train, feature_names)
+            shap_importance = compute_shap_importance(model, X_train, X_test, feature_names)
             print("\nTop 20 najvaznijih reci po SHAP znacaju (Logistic Regression):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {val:.5f}")
@@ -138,7 +138,7 @@ def evaluate_model(model, df, n_splits=10):
 
         elif isinstance(model, MultinomialNB) and vectorizer is not None:
             feature_names = vectorizer.get_feature_names_out()
-            shap_importance = compute_shap_importance_nb(model, X_train, feature_names)
+            shap_importance = compute_shap_importance_nb(model, X_train, X_test, feature_names)
             print("\nTop 20 najvaznijih reci po SHAP znacaju (Naive Bayes):")
             for word, val in shap_importance[:20]:
                 print(f"{word:<20} SHAP: {float(val[0]):.5f}")
@@ -172,27 +172,59 @@ def evaluate_model(model, df, n_splits=10):
 
     return f1_scores, k_words, top_words_list
 
-def compute_shap_importance(model, X_sample, feature_names):
-    explainer = shap.Explainer(model, X_sample, feature_names=feature_names)
-    shap_values = explainer(X_sample)
+def compute_shap_importance(model, X_train, X_test, feature_names, background_size=None, n_test=None):
+    # --- background set ---
+    if background_size is None or background_size >= X_train.shape[0]:
+        background = X_train.astype(np.float32)
+    else:
+        rng = np.random.default_rng(42)
+        idx_bg = rng.choice(X_train.shape[0], background_size, replace=False)
+        background = X_train[idx_bg].astype(np.float32)
 
+    explainer = shap.Explainer(model, background, feature_names=feature_names)
+
+    # --- test sample ---
+    if n_test is None or n_test >= X_test.shape[0]:
+        X_test_sample = X_test
+    else:
+        rng = np.random.default_rng(42)
+        idx_test = rng.choice(X_test.shape[0], n_test, replace=False)
+        X_test_sample = X_test[idx_test]
+
+    shap_values = explainer(X_test_sample)
     mean_abs_shap = np.abs(shap_values.values).mean(axis=0)
     feature_importance = list(zip(feature_names, mean_abs_shap))
     feature_importance.sort(key=lambda x: x[1], reverse=True)
 
     return feature_importance
 
-def compute_shap_importance_rf_dt(model, X_sample, feature_names):
-    X_sample_dense = X_sample.toarray() if hasattr(X_sample, "toarray") else X_sample
 
-    background = shap.sample(X_sample_dense, 50, random_state=42)
+def compute_shap_importance_rf_dt(model, X_train, X_test, feature_names, background_size=None, n_test=None):
+    X_train_dense = X_train.toarray() if hasattr(X_train, "toarray") else X_train
+    X_test_dense = X_test.toarray() if hasattr(X_test, "toarray") else X_test
+
+    # --- background set ---
+    if background_size is None or background_size >= X_train_dense.shape[0]:
+        background = X_train_dense.astype(np.float32)
+    else:
+        rng = np.random.default_rng(42)
+        idx_bg = rng.choice(X_train_dense.shape[0], background_size, replace=False)
+        background = X_train_dense[idx_bg].astype(np.float32)
+
     explainer = shap.TreeExplainer(model, data=background, feature_perturbation="interventional")
 
-    shap_values = explainer.shap_values(X_sample_dense)
+    # --- test sample ---
+    if n_test is None or n_test >= X_test_dense.shape[0]:
+        X_test_sample = X_test_dense
+    else:
+        rng = np.random.default_rng(42)
+        idx_test = rng.choice(X_test_dense.shape[0], n_test, replace=False)
+        X_test_sample = X_test_dense[idx_test]
+
+    shap_values = explainer.shap_values(X_test_sample)
     shap_values_to_use = shap_values[1] if isinstance(shap_values, list) and len(shap_values) == 2 else shap_values
 
     mean_abs_shap = np.abs(shap_values_to_use).mean(axis=0)
-
     if mean_abs_shap.ndim > 1:
         mean_abs_shap = mean_abs_shap.mean(axis=1)
 
@@ -201,20 +233,34 @@ def compute_shap_importance_rf_dt(model, X_sample, feature_names):
 
     return shap_importance_list
 
-def compute_shap_importance_nb(model, X_sample, feature_names):
-    X_sample_dense = X_sample.toarray() if hasattr(X_sample, "toarray") else X_sample
 
-    background = shap.sample(X_sample_dense, 50, random_state=42)
+def compute_shap_importance_nb(model, X_train, X_test, feature_names, background_size=200, n_test=200):
+    X_train_dense = X_train.toarray() if hasattr(X_train, "toarray") else X_train
+    X_test_dense = X_test.toarray() if hasattr(X_test, "toarray") else X_test
+
+    # --- background set ---
+    if background_size is None or background_size >= X_train_dense.shape[0]:
+        background = X_train_dense.astype(np.float32)
+    else:
+        rng = np.random.default_rng(42)
+        idx_bg = rng.choice(X_train_dense.shape[0], background_size, replace=False)
+        background = X_train_dense[idx_bg].astype(np.float32)
+
     explainer = shap.KernelExplainer(model.predict_proba, background)
 
-    shap_values = explainer.shap_values(X_sample_dense[:20], nsamples=100)
+    # --- test sample ---
+    if n_test is None or n_test >= X_test_dense.shape[0]:
+        X_test_sample = X_test_dense
+    else:
+        rng = np.random.default_rng(42)
+        idx_test = rng.choice(X_test_dense.shape[0], n_test, replace=False)
+        X_test_sample = X_test_dense[idx_test]
 
+    shap_values = explainer.shap_values(X_test_sample, nsamples=300)
     shap_vals = shap_values[1] if isinstance(shap_values, list) and len(shap_values) == 2 else shap_values
-
     shap_vals = np.array(shap_vals)
 
     mean_abs_shap = np.abs(shap_vals).mean(axis=0)
-
     shap_importance_list = list(zip(feature_names, mean_abs_shap.tolist()))
     shap_importance_list.sort(key=lambda x: x[1], reverse=True)
 
@@ -310,23 +356,27 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
         try:
             np.random.seed(42)
 
-            background_indices = np.random.choice(len(X_train_pad), size=50, replace=False)
-            background = X_train_pad[background_indices].astype('float32')
+            
+            background = shap.kmeans(X_train_pad.astype('float32'), 100)
 
-            test_sample_indices = np.random.choice(len(X_test_pad), size=30, replace=False)
+            
+            test_sample_indices = np.random.choice(len(X_test_pad), size=200, replace=False)
             test_sample = X_test_pad[test_sample_indices].astype('float32')
 
+            
             explainer = shap.KernelExplainer(lambda x: model.predict(x).flatten(), background)
-            shap_values = explainer.shap_values(test_sample, nsamples=100)
+            shap_values = explainer.shap_values(test_sample, nsamples=200)
 
-            if isinstance(shap_values, list) and len(shap_values) == 2:
-                shap_matrix = shap_values[1]
+            
+            if isinstance(shap_values, list):
+                if len(shap_values) == 2:
+                    shap_matrix = shap_values[1]   
+                else:
+                    shap_matrix = np.mean(shap_values, axis=0)
             else:
                 shap_matrix = shap_values
 
-            if shap_matrix.ndim == 3:
-                shap_matrix = shap_matrix[:, 0, :]
-
+            
             shap_matrix = np.abs(shap_matrix)
 
             if shap_matrix.shape != test_sample.shape:
@@ -354,6 +404,7 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
 
         except Exception as e:
             print(f"[Fold {fold}] SHAP analiza nije uspela: {e}")
+
 
         acc = accuracy_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred)
@@ -405,7 +456,7 @@ def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, to
         X_train_seq = pad_sequences(texts_to_sequences(train_texts), maxlen=max_len)
         X_test_seq = pad_sequences(texts_to_sequences(test_texts), maxlen=max_len)
         model = build_bilstm_model(max_words=mid+1, max_len=max_len)
-        model.fit(X_train_seq, y_train, epochs=1, batch_size=128, verbose=0)
+        model.fit(X_train_seq, y_train, epochs=10, batch_size=32, verbose=0)
 
         y_pred_prob = model.predict(X_test_seq)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
@@ -430,12 +481,12 @@ def main():
     print(f"Broj 0 (ham): {counts.get(0, 0)}")
 
     results = []
-
+    
     print("\n=== Bi-LSTM ===")
-    max_words = 2500
-    max_len = 100
+    max_words = 5000
+    max_len = 150
     # X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    f1_bilstm, k_bilstm, top_words_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=1, batch_size=64, max_words=max_words, max_len=max_len)
+    f1_bilstm, k_bilstm, top_words_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=10, batch_size=32, max_words=max_words, max_len=max_len)
     results.append(('BiLSTM', f1_bilstm, k_bilstm, top_words_bilstm))
 
     #X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
@@ -447,7 +498,7 @@ def main():
     print("\n--- Decision Tree ---")
     f1_dt, k_dt, top_words_dt = evaluate_model(DecisionTreeClassifier(criterion='entropy', splitter='best', max_depth=20, min_samples_split=5, min_samples_leaf=2, min_impurity_decrease=0.001, ccp_alpha=0.001, random_state=42), df_downsampled, n_splits=10)
     results.append(('Decision Tree', f1_dt, k_dt, top_words_dt))
-
+    
     print("\n--- Logistic Regression ---")
     f1_lr, k_lr, top_words_lr = evaluate_model(LogisticRegression(penalty='l2', C=100, solver='saga', max_iter=1000, class_weight=None, multi_class='ovr', random_state=42, n_jobs=-1), df_downsampled, n_splits=10)
     results.append(('Logistic Regression', f1_lr, k_lr, top_words_lr))
