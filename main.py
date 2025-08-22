@@ -54,17 +54,11 @@ def load_and_balance_data(filepath, downsample=False):
     df_downsampled = df_downsampled.sample(frac=1, random_state=42).reset_index(drop=True)
     return df_downsampled
 
-def vectorize_text(df, text_column='text'):
-    vectorizer = TfidfVectorizer(stop_words='english')
-    X = vectorizer.fit_transform(df[text_column])
-    y = df['spam']
-    return X, y, vectorizer
-
 def evaluate_model(model, df, n_splits=10):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls, k_words, top_words_list = [], [], [], [], [], []
 
-    # Učitamo emails.csv samo jednom
+    # Ucitamo emails.csv samo jednom
     #emails_df = pd.read_csv("novi2.csv")
     #emails_texts = emails_df['text']
     #emails_labels = emails_df['spam']
@@ -77,7 +71,7 @@ def evaluate_model(model, df, n_splits=10):
 
         vectorizer = TfidfVectorizer(
             stop_words='english',
-            max_features=5000, #manje za nb
+            max_features=5000,
             ngram_range=(1, 2),
             min_df=2,
             max_df=0.95,
@@ -85,24 +79,11 @@ def evaluate_model(model, df, n_splits=10):
         )
 
         X_train = vectorizer.fit_transform(train_texts)
-        #emails_texts = emails_df['text'].fillna("")
         X_test = vectorizer.transform(test_texts)
 
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
 
-        # Testiranje na emails.csv
-        #X_emails = vectorizer.transform(emails_texts)
-        #y_emails_pred = model.predict(X_emails)
-
-        #emails_acc = accuracy_score(emails_labels, y_emails_pred)
-        #emails_f1 = f1_score(emails_labels, y_emails_pred)
-        #emails_prec = precision_score(emails_labels, y_emails_pred)
-        #emails_rec = recall_score(emails_labels, y_emails_pred)
-
-        #print(f"[Fold {fold} - Emails.csv] Accuracy={emails_acc:.3f}, F1={emails_f1:.3f}, Precision={emails_prec:.3f}, Recall={emails_rec:.3f}")
-
-          # SHAP analiza
         if (isinstance(model, RandomForestClassifier) or isinstance(model, DecisionTreeClassifier)) and vectorizer is not None:
             feature_names = vectorizer.get_feature_names_out()
             shap_importance = compute_shap_importance_rf_dt(model, X_train, X_test, feature_names)
@@ -298,6 +279,28 @@ def find_k_for_target_accuracy(model_template, train_texts, test_texts, y_train,
     return best_k
 
 
+def load_glove_embeddings(filepath, embedding_dim=100):
+    embeddings_index = {}
+    with open(filepath, encoding="utf-8") as f:
+        for line in f:
+            values = line.split()
+            word = values[0]
+            coefs = np.asarray(values[1:], dtype="float32")
+            embeddings_index[word] = coefs
+    print(f"Ucitano {len(embeddings_index)} embeddinga iz {filepath}")
+    return embeddings_index
+
+
+def create_embedding_matrix(tokenizer, embeddings_index, max_words=5000, embedding_dim=100):
+    embedding_matrix = np.zeros((max_words, embedding_dim))
+    for word, i in tokenizer.word_index.items():
+        if i < max_words:
+            embedding_vector = embeddings_index.get(word)
+            if embedding_vector is not None:
+                embedding_matrix[i] = embedding_vector
+    print(f"Kreirana embedding matrica: {embedding_matrix.shape}")
+    return embedding_matrix
+
 
 def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=200):
     tokenizer = Tokenizer(num_words=max_words)
@@ -307,17 +310,35 @@ def prepare_bilstm_data(df, text_column='text', max_words=5000, max_len=200):
     y = df['spam'].values
     return X, y, tokenizer
 
-def build_bilstm_model(max_words=5000, max_len=200):
+def build_bilstm_model(max_words=5000, max_len=200, embedding_dim=100, embedding_matrix=None):
     model = Sequential()
-    model.add(Embedding(input_dim=max_words, output_dim=128, input_length=max_len))
-    model.add(Bidirectional(LSTM(64)))
+    if embedding_matrix is not None:
+        model.add(Embedding(
+            input_dim=max_words,
+            output_dim=embedding_dim,
+            weights=[embedding_matrix],
+            input_length=max_len,
+            trainable=False #true za fine tuning
+        ))
+    else:
+        model.add(Embedding(input_dim=max_words, output_dim=128, input_length=max_len))
+    
+    model.add(Bidirectional(LSTM(64, dropout=0.2, recurrent_dropout=0.2)))
     model.add(Dense(1, activation='sigmoid'))
     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
     return model
 
-def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, max_len=200):
+def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, 
+                    max_words=5000, max_len=200, 
+                    embedding_dim=100, glove_path=None):
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     accuracies, f1_scores, precisions, recalls, k_words, top_words_all = [], [], [], [], [], []
+
+    embeddings_index = None
+    if glove_path:
+        embeddings_index = load_glove_embeddings(glove_path, embedding_dim)
+
+    embedding_matrix = None
 
     for fold, (train_index, test_index) in enumerate(skf.split(df['text'], df['spam']), 1):
         print(f"\n--- Fold {fold} ---")
@@ -335,9 +356,19 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
         X_test_seq = tokenizer.texts_to_sequences(test_texts)
         X_test_pad = pad_sequences(X_test_seq, maxlen=max_len)
 
-        model = build_bilstm_model(max_words=max_words, max_len=max_len)
-        early_stop = EarlyStopping(monitor='val_loss', patience=2, restore_best_weights=True)
+        if embeddings_index is not None and embedding_matrix is None:
+            embedding_matrix = create_embedding_matrix(
+                tokenizer, embeddings_index, max_words=max_words, embedding_dim=embedding_dim
+            )
 
+        model = build_bilstm_model(
+        max_words=max_words,
+        max_len=max_len,
+        embedding_dim=embedding_dim,
+        embedding_matrix=embedding_matrix
+    )
+
+        early_stop = EarlyStopping(monitor='val_loss', patience=2, restore_best_weights=True)
         model.fit(
             X_train_pad, y_train,
             validation_split=0.1,
@@ -349,9 +380,6 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
 
         y_pred_prob = model.predict(X_test_pad)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
-
-        used_word_scores = []
-        index_word = {}
 
         try:
             np.random.seed(42)
@@ -405,7 +433,6 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
         except Exception as e:
             print(f"[Fold {fold}] SHAP analiza nije uspela: {e}")
 
-
         acc = accuracy_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred)
         prec = precision_score(y_test, y_pred)
@@ -422,7 +449,11 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
         train_texts = [df['text'].iloc[i] for i in train_index]
         test_texts = [df['text'].iloc[i] for i in test_index]
 
-        k = find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8)
+        k = find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, 
+                                    top_words, accuracy_threshold=0.8,
+                                    max_len=max_len,
+                                    embedding_matrix=embedding_matrix,
+                                    embedding_dim=embedding_dim)
         print(f"[Fold {fold}] K = {k} reci je dovoljno za 80% tacnosti")
         k_words.append(k)
 
@@ -436,7 +467,9 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32, max_words=5000, ma
 
     return f1_scores, k_words, top_words_all
 
-def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, top_words, accuracy_threshold=0.8, max_len=200):
+def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, 
+                                    top_words, accuracy_threshold=0.8, 
+                                    max_len=200, embedding_matrix=None, embedding_dim=100):
     left, right = 1, len(top_words)
     best_k = None
 
@@ -455,7 +488,14 @@ def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, to
 
         X_train_seq = pad_sequences(texts_to_sequences(train_texts), maxlen=max_len)
         X_test_seq = pad_sequences(texts_to_sequences(test_texts), maxlen=max_len)
-        model = build_bilstm_model(max_words=mid+1, max_len=max_len)
+
+        embedding_matrix_k = embedding_matrix[:mid+1, :]
+        model = build_bilstm_model(
+            max_words=mid+1,
+            max_len=max_len,
+            embedding_dim=embedding_dim,
+            embedding_matrix=embedding_matrix_k
+        )
         model.fit(X_train_seq, y_train, epochs=10, batch_size=32, verbose=0)
 
         y_pred_prob = model.predict(X_test_seq)
@@ -483,13 +523,20 @@ def main():
     results = []
     
     print("\n=== Bi-LSTM ===")
-    max_words = 5000
-    max_len = 150
-    # X_bilstm, y_bilstm, tokenizer = prepare_bilstm_data(df_downsampled, text_column='text', max_words=max_words, max_len=max_len)
-    f1_bilstm, k_bilstm, top_words_bilstm = evaluate_bilstm(df_downsampled, n_splits=10, epochs=10, batch_size=32, max_words=max_words, max_len=max_len)
+
+    f1_bilstm, k_bilstm, top_words_bilstm = evaluate_bilstm(
+    df_downsampled,
+    n_splits=10,
+    epochs=10,
+    batch_size=32,
+    max_words=5000,
+    max_len=150,
+    embedding_dim=100,
+    glove_path="glove.6B.100d.txt"
+)
+
     results.append(('BiLSTM', f1_bilstm, k_bilstm, top_words_bilstm))
 
-    #X, y, vectorizer = vectorize_text(df_downsampled, text_column='text')
 
     print("\n--- Random Forest ---")
     f1_rf, k_rf, top_words_rf = evaluate_model(RandomForestClassifier(n_estimators=150, criterion='gini', max_depth=30, min_samples_split=2, min_samples_leaf=1, max_features='sqrt', bootstrap=True, oob_score=True, n_jobs=-1, random_state=42), df_downsampled, n_splits=10)
