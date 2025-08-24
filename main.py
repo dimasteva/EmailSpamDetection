@@ -318,7 +318,7 @@ def build_bilstm_model(max_words=5000, max_len=200, embedding_dim=100, embedding
             output_dim=embedding_dim,
             weights=[embedding_matrix],
             input_length=max_len,
-            trainable=False #true za fine tuning
+            trainable=True #true za fine tuning
         ))
     else:
         model.add(Embedding(input_dim=max_words, output_dim=128, input_length=max_len))
@@ -388,7 +388,7 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32,
             background = shap.kmeans(X_train_pad.astype('float32'), 100)
 
             
-            test_sample_indices = np.random.choice(len(X_test_pad), size=200, replace=False)
+            test_sample_indices = np.random.choice(len(X_test_pad), size=100, replace=False)
             test_sample = X_test_pad[test_sample_indices].astype('float32')
 
             
@@ -470,7 +470,7 @@ def evaluate_bilstm(df, n_splits=10, epochs=7, batch_size=32,
 def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test, 
                                     top_words, accuracy_threshold=0.8, 
                                     max_len=200, embedding_matrix=None, embedding_dim=100):
-    left, right = 1, len(top_words)
+    left, right = 30, 200 #len(top_words)
     best_k = None
 
     while left <= right:
@@ -496,7 +496,7 @@ def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test,
             embedding_dim=embedding_dim,
             embedding_matrix=embedding_matrix_k
         )
-        model.fit(X_train_seq, y_train, epochs=10, batch_size=32, verbose=0)
+        model.fit(X_train_seq, y_train, epochs=3, batch_size=64, verbose=1)
 
         y_pred_prob = model.predict(X_test_seq)
         y_pred = (y_pred_prob > 0.5).astype(int).flatten()
@@ -527,10 +527,10 @@ def main():
     f1_bilstm, k_bilstm, top_words_bilstm = evaluate_bilstm(
     df_downsampled,
     n_splits=10,
-    epochs=10,
+    epochs=20,
     batch_size=32,
     max_words=5000,
-    max_len=150,
+    max_len=200,
     embedding_dim=100,
     glove_path="glove.6B.100d.txt"
 )
