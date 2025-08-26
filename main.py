@@ -478,7 +478,7 @@ def find_k_for_bilstm_binary_search(train_texts, test_texts, y_train, y_test,
         selected_words = top_words[:mid]
         word_to_index = {word: i+1 for i, word in enumerate(selected_words)}
 
-        def texts_to_sequences(texts):
+        def texts_to_sequences(texts): 
             sequences = []
             for text in texts:
                 words = re.findall(r'\b\w+\b', text.lower())
