@@ -16,7 +16,7 @@ def significant_pairs(r_mat, p_mat, alpha=0.05, name=""):
                 r_val = r_mat.iloc[i, j]
                 print(f"{cols[i]} - {cols[j]}: r = {r_val:.4f}, p = {p_val:.4f}")
 
-df = pd.read_csv('novicheckpoint1.csv')
+df = pd.read_csv('results1.csv')
 
 f1_pivot = df.pivot(index='Fold', columns='Model', values='F1 Score')
 k_pivot = df.pivot(index='Fold', columns='Model', values='K Words')
